@@ -6,87 +6,6 @@ script `07-docker.sh` instala (pacote `docker-compose-plugin`).
 
 > Verifique sua instalação com: `docker compose version`
 
-## Estrutura
-
-```
-compose/
-├── databases/        # Postgres, MySQL, Redis, MongoDB
-├── data-stack/       # Spark, Hadoop (HDFS), Kafka (+ UI), Airflow
-├── localstack/       # AWS local: SQS, SNS, S3
-└── all-in-one/       # tudo acima num único compose
-```
-
-Cada pasta traz:
-- `docker-compose.yml` — os serviços
-- `.env.example` — variáveis (portas, credenciais); copie para `.env` e ajuste
-- arquivos auxiliares quando necessário (`hadoop.env`, pasta `airflow/dags/`)
-
-## Como subir
-
-Entre na pasta desejada, (opcionalmente) crie o `.env` e suba:
-
-```bash
-cd compose/databases          # ou data-stack, ou all-in-one
-cp .env.example .env          # opcional — há defaults embutidos
-docker compose up -d          # sobe em segundo plano
-docker compose ps             # status dos serviços
-docker compose logs -f        # acompanha logs
-docker compose down           # para tudo (mantém os dados nos volumes)
-docker compose down -v        # para e APAGA os dados (cuidado!)
-```
-
-Para subir **apenas alguns** serviços (útil no all-in-one, que é pesado):
-
-```bash
-docker compose up -d postgres redis kafka
-```
-
-## Stack: databases
-
-| Serviço   | Imagem        | Porta padrão | Credenciais padrão           |
-|-----------|---------------|--------------|------------------------------|
-| Postgres  | postgres:16   | 5432         | dev / dev  (db: dev)         |
-| MySQL     | mysql:8.4     | 3306         | dev / dev  (root: root)      |
-| Redis     | redis:7       | 6379         | —                            |
-| MongoDB   | mongo:7       | 27017        | dev / dev                    |
-
-Todos têm `healthcheck` e volume nomeado para persistência. Strings de conexão:
-
-```
-postgresql://dev:dev@localhost:5432/dev
-mysql://dev:dev@localhost:3306/dev
-redis://localhost:6379
-mongodb://dev:dev@localhost:27017
-```
-
-## Stack: data-stack
-
-Ambiente de estudo/desenvolvimento (single node) — **não é para produção**.
-
-| Serviço          | UI / Porta                  | Observações                          |
-|------------------|-----------------------------|--------------------------------------|
-| Spark Master     | http://localhost:8080       | submissão em `spark://localhost:7077`|
-| Spark Worker     | http://localhost:8081       | 2 cores / 2G por padrão              |
-| Hadoop NameNode  | http://localhost:9870       | HDFS RPC em `localhost:9000`         |
-| Hadoop DataNode  | —                           | replicação = 1                       |
-| Kafka            | `localhost:9092`            | modo KRaft (sem Zookeeper)           |
-| Kafka UI         | http://localhost:8083       | gerencia tópicos/mensagens           |
-| Airflow          | http://localhost:8082       | login: `admin` / `admin`             |
-
-Detalhes:
-- **Airflow**: usa `LocalExecutor` com um Postgres próprio de metadados. Na
-  primeira subida ele migra o banco e cria o usuário admin automaticamente
-  (pode levar 1–2 min). Coloque suas DAGs em `data-stack/airflow/dags/`.
-- **Hadoop**: configurado via `hadoop.env`. Para testar o HDFS:
-  ```bash
-  docker compose exec hadoop-namenode hdfs dfs -mkdir /teste
-  docker compose exec hadoop-namenode hdfs dfs -ls /
-  ```
-- **Kafka**: criar um tópico de teste:
-  ```bash
-  docker compose exec kafka kafka-topics.sh --create --topic teste \
-    --bootstrap-server localhost:9092
-  ```
 
 ## Stack: localstack
 
@@ -171,11 +90,7 @@ Em vez do all-in-one, você também pode combinar os composes separados sem
 duplicar nada, passando vários `-f`. Rode a partir da pasta `compose/`:
 
 ```bash
-docker compose \
-  -f databases/docker-compose.yml \
-  -f data-stack/docker-compose.yml \
-  -f localstack/docker-compose.yml \
-  up -d
+docker compose -f localstack/docker-compose.yml up -d
 ```
 
 > Nesse modo, os caminhos relativos de `env_file` e volumes bind (como
