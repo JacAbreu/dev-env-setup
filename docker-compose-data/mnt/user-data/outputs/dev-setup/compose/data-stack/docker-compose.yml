@@ -1,0 +1,160 @@
+# Stack: Dados (Spark, Hadoop, Airflow, Kafka)
+# Ambiente local de estudo/desenvolvimento — NÃO é para produção.
+#
+# Uso:
+#   docker compose up -d
+#   docker compose down            (para; mantém os dados)
+#   docker compose down -v         (para e APAGA os dados)
+#
+# Interfaces web:
+#   Spark Master ......... http://localhost:8080
+#   Spark Worker ......... http://localhost:8081
+#   Hadoop NameNode ...... http://localhost:9870
+#   Airflow .............. http://localhost:8082   (login: admin / admin)
+#   Kafka UI ............. http://localhost:8083
+#
+# Ajuste imagens/portas/credenciais no .env (veja .env.example).
+
+services:
+  # ---------- Spark (standalone: 1 master + 1 worker) ----------
+  spark-master:
+    image: bitnami/spark:3.5
+    container_name: data-spark-master
+    restart: unless-stopped
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+    ports:
+      - "${SPARK_MASTER_WEBUI:-8080}:8080"   # UI
+      - "${SPARK_MASTER_PORT:-7077}:7077"    # submissão de jobs
+
+  spark-worker:
+    image: bitnami/spark:3.5
+    container_name: data-spark-worker
+    restart: unless-stopped
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2G}
+      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+    ports:
+      - "${SPARK_WORKER_WEBUI:-8081}:8081"
+
+  # ---------- Hadoop (HDFS: namenode + datanode) ----------
+  hadoop-namenode:
+    image: apache/hadoop:3.4.1
+    container_name: data-hadoop-namenode
+    restart: unless-stopped
+    hostname: namenode
+    command: ["hdfs", "namenode"]
+    environment:
+      ENSURE_NAMENODE_DIR: /tmp/hadoop-root/dfs/name
+    env_file:
+      - ./hadoop.env
+    ports:
+      - "${HDFS_NAMENODE_UI:-9870}:9870"     # UI
+      - "${HDFS_NAMENODE_RPC:-9000}:9000"    # RPC
+    volumes:
+      - hadoop_namenode:/tmp/hadoop-root/dfs/name
+
+  hadoop-datanode:
+    image: apache/hadoop:3.4.1
+    container_name: data-hadoop-datanode
+    restart: unless-stopped
+    hostname: datanode
+    command: ["hdfs", "datanode"]
+    depends_on:
+      - hadoop-namenode
+    env_file:
+      - ./hadoop.env
+    volumes:
+      - hadoop_datanode:/tmp/hadoop-root/dfs/data
+
+  # ---------- Kafka (KRaft, sem Zookeeper) ----------
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: data-kafka
+    restart: unless-stopped
+    environment:
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: "broker,controller"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://localhost:${KAFKA_PORT:-9092}"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+    volumes:
+      - kafka_data:/bitnami/kafka
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: data-kafka-ui
+    restart: unless-stopped
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    ports:
+      - "${KAFKA_UI_PORT:-8083}:8080"
+
+  # ---------- Airflow (executor local + Postgres de metadados) ----------
+  airflow-db:
+    image: postgres:16
+    container_name: data-airflow-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  airflow:
+    image: apache/airflow:2.9.3
+    container_name: data-airflow
+    restart: unless-stopped
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USER:-admin}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
+    ports:
+      - "${AIRFLOW_PORT:-8082}:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+    # Inicializa o banco, cria o usuário admin e sobe webserver + scheduler.
+    command: >
+      bash -c "airflow db migrate &&
+               airflow users create --username ${AIRFLOW_USER:-admin}
+                 --password ${AIRFLOW_PASSWORD:-admin} --firstname Admin
+                 --lastname User --role Admin --email admin@example.com || true &&
+               (airflow scheduler & airflow webserver)"
+
+volumes:
+  hadoop_namenode:
+  hadoop_datanode:
+  kafka_data:
+  airflow_db:
+  airflow_logs:

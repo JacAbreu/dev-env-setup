@@ -1,0 +1,43 @@
+# Stack: LocalStack (AWS local) — SQS, SNS e S3
+# Emula serviços da AWS localmente para desenvolvimento/testes.
+# Edição Community (gratuita); SQS, SNS e S3 são totalmente suportados.
+#
+# Uso:
+#   docker compose up -d
+#   docker compose logs -f localstack
+#   docker compose down            (para; mantém os dados)
+#   docker compose down -v         (para e APAGA os dados)
+#
+# Endpoint único para todos os serviços:  http://localhost:4566
+# Ajuste portas/região no .env (veja .env.example).
+
+services:
+  localstack:
+    image: localstack/localstack:3
+    container_name: dev-localstack
+    restart: unless-stopped
+    ports:
+      - "${LOCALSTACK_PORT:-4566}:4566"              # gateway de todos os serviços
+      - "${LOCALSTACK_EXTERNAL:-4510-4559}:4510-4559" # portas externas de serviços
+    environment:
+      # Serviços a iniciar (lazy: sobem sob demanda mesmo sem listar, mas
+      # declarar acelera e deixa explícito o que usamos).
+      SERVICES: ${LOCALSTACK_SERVICES:-sqs,sns,s3}
+      DEBUG: ${LOCALSTACK_DEBUG:-0}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      # Persistência dos dados entre reinícios (recurso da Community desde a v3).
+      PERSISTENCE: ${LOCALSTACK_PERSISTENCE:-1}
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Scripts de inicialização (criam filas/tópicos/buckets no boot).
+      - ./init:/etc/localstack/init/ready.d
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  localstack_data:
